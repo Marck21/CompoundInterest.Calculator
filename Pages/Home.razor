@@ -1,5 +1,4 @@
 ﻿@page "/"
-
 @inject Blazored.LocalStorage.ILocalStorageService localStorage
 
 <MudThemeProvider />
@@ -11,10 +10,10 @@
             <MudPaper Class="pa-4" Elevation="3">
                 <MudText Typo="Typo.h5" GutterBottom="true">Calculadora de Interés Compuesto</MudText>
 
-                <MudNumericField @bind-Value="inputs.InitialBalance" @bind-Value:after="Calculate" Label="Balance Inicial" Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Euro" Step="1000" />
-                <MudNumericField @bind-Value="inputs.AnnualInterestRate" @bind-Value:after="Calculate" Label="Ratio Interés Anual (%)" Variant="Variant.Outlined" Format="F2" Step="0.1" Class="mt-4" />
-                <MudNumericField @bind-Value="inputs.DurationInYears" @bind-Value:after="Calculate" Label="Duración (años)" Variant="Variant.Outlined" Class="mt-4" />
-                <MudNumericField @bind-Value="inputs.AnnualInflationRate" @bind-Value:after="Calculate" Label="Inflación Anual Prevista (%)" Variant="Variant.Outlined" Format="F2" Step="0.1" Class="mt-4" />
+                <MudNumericField @bind-Value="inputs.InitialBalance" @bind-Value:after="() => CalculateAsync()" Label="Balance Inicial" Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Euro" Step="1000" />
+                <MudNumericField @bind-Value="inputs.AnnualInterestRate" @bind-Value:after="() => CalculateAsync()" Label="Ratio Interés Anual (%)" Variant="Variant.Outlined" Format="F2" Step="0.1" Class="mt-4" />
+                <MudNumericField @bind-Value="inputs.DurationInYears" @bind-Value:after="() => CalculateAsync()" Label="Duración (años)" Variant="Variant.Outlined" Class="mt-4" />
+                <MudNumericField @bind-Value="inputs.AnnualInflationRate" @bind-Value:after="() => CalculateAsync()" Label="Inflación Anual Prevista (%)" Variant="Variant.Outlined" Format="F2" Step="0.1" Class="mt-4" />
 
                 <MudCard Class="mt-4" Elevation="2">
                     <MudCardHeader><CardHeaderContent><MudText Typo="Typo.h6">Aportaciones Periódicas</MudText></CardHeaderContent></MudCardHeader>
@@ -26,9 +25,9 @@
                         @foreach ( var period in inputs.ContributionPeriods )
                         {
                             <MudGrid Spacing="2" Class="mb-2 align-center">
-                                <MudItem xs="3"><MudNumericField @bind-Value="period.StartYear" @bind-Value:after="Calculate" Label="Desde Año" Variant="Variant.Outlined" /></MudItem>
-                                <MudItem xs="3"><MudNumericField @bind-Value="period.EndYear" @bind-Value:after="Calculate" Label="Hasta Año" Variant="Variant.Outlined" /></MudItem>
-                                <MudItem xs="5"><MudNumericField @bind-Value="period.Amount" @bind-Value:after="Calculate" Label="Aport. Mensual" Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Euro" Step="10" /></MudItem>
+                                <MudItem xs="3"><MudNumericField @bind-Value="period.StartYear" @bind-Value:after="() => CalculateAsync()" Label="Desde Año" Variant="Variant.Outlined" /></MudItem>
+                                <MudItem xs="3"><MudNumericField @bind-Value="period.EndYear" @bind-Value:after="() => CalculateAsync()" Label="Hasta Año" Variant="Variant.Outlined" /></MudItem>
+                                <MudItem xs="5"><MudNumericField @bind-Value="period.Amount" @bind-Value:after="() => CalculateAsync()" Label="Aport. Mensual" Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Euro" Step="10" /></MudItem>
                                 <MudItem xs="1"><MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="@(() => RemovePeriod( period ))" Disabled="@(inputs.ContributionPeriods.Count <= 1)" /></MudItem>
                             </MudGrid>
                         }
@@ -84,6 +83,7 @@
     private CompoundInterestCalculations calculated = new CompoundInterestCalculations();
     private List<AnnualBreakdownRow> annualBreakdown = new List<AnnualBreakdownRow>();
     private System.Globalization.CultureInfo es = new System.Globalization.CultureInfo( "es-ES" );
+    private bool isLoading = true;
 
     private double[] pieChartData = new double[3];
     private string[] pieChartLabels = { "Balance Inicial", "Depósitos Totales", "Interés Total" };
@@ -93,41 +93,57 @@
     private string[] barChartXAxisLabels = Array.Empty<string>();
     private ChartOptions barChartOptions = new ChartOptions { YAxisFormat = "c0", ChartPalette = new string[] { "#A6A0F0", "#594AE2", "#00C853" } };
 
-    protected override void OnInitialized() => Calculate();
+    protected override async Task OnInitializedAsync()
+    {
+        var savedInputs = await localStorage.GetItemAsync<CompoundInterestInputs>( "compoundInterestInputs" );
+        if ( savedInputs != null )
+        {
+            inputs = savedInputs;
+        }
+        isLoading = false;
+        await CalculateAsync( isInitialLoad: true );
+    }
 
-    private void AddPeriod()
+    private async Task AddPeriod()
     {
         var lastPeriod = inputs.ContributionPeriods.LastOrDefault();
         var nextStartYear = (lastPeriod?.EndYear ?? 0) + 1;
         inputs.ContributionPeriods.Add( new ContributionPeriod { StartYear = nextStartYear, EndYear = inputs.DurationInYears, Amount = 0 } );
-        SortPeriods();
+        await SortPeriods();
     }
 
-    private void RemovePeriod( ContributionPeriod period )
+    private async Task RemovePeriod( ContributionPeriod period )
     {
         if ( inputs.ContributionPeriods.Count > 1 )
         {
             inputs.ContributionPeriods.Remove( period );
-            Calculate();
+            await CalculateAsync();
         }
     }
 
-    private void SortPeriods()
+    private async Task SortPeriods()
     {
         inputs.ContributionPeriods = inputs.ContributionPeriods.OrderBy( p => p.StartYear ).ToList();
-        Calculate();
+        await CalculateAsync();
     }
 
-    private void Calculate()
+    private async Task CalculateAsync( bool isInitialLoad = false )
     {
         calculated.ValidationMessage = string.Empty;
         var sortedPeriods = inputs.ContributionPeriods.OrderBy( p => p.StartYear ).ToList();
+
+        // CORREGIDO: La validación ahora permite que un periodo empiece donde termina el anterior
         for ( int i = 1; i < sortedPeriods.Count; i++ )
         {
-            if ( sortedPeriods[i].StartYear <= sortedPeriods[i - 1].EndYear )
+            if ( sortedPeriods[i].StartYear < sortedPeriods[i - 1].EndYear ) // <-- El cambio clave está aquí
             {
-                calculated.ValidationMessage = $"Error: El periodo que empieza en el año {sortedPeriods[i].StartYear} se solapa con el anterior.";
+                calculated.ValidationMessage = $"Error: El periodo que empieza en el año {sortedPeriods[i].StartYear} se solapa con el anterior que termina en el año {sortedPeriods[i - 1].EndYear}.";
                 annualBreakdown.Clear();
+                // Limpiar resultados para evitar mostrar datos incorrectos
+                calculated.FinalBalance = 0;
+                calculated.InflationAdjustedFinalBalance = 0;
+                pieChartData = new double[3];
+                barChartSeries.Clear();
                 StateHasChanged();
                 return;
             }
@@ -142,7 +158,12 @@
         for ( int year = 1; year <= inputs.DurationInYears; year++ )
         {
             decimal balanceAtStartOfYear = currentBalance;
-            var period = sortedPeriods.FirstOrDefault( p => year >= p.StartYear && year <= p.EndYear );
+            var period = sortedPeriods.LastOrDefault( p => year >= p.StartYear && year < p.EndYear );
+            if ( period == null )
+            {
+                period = sortedPeriods.FirstOrDefault( p => year >= p.StartYear && year <= p.EndYear );
+            }
+
             decimal monthlyContribution = period?.Amount ?? 0;
 
             currentBalance = FinancialMath.CalculateFutureValue( balanceAtStartOfYear, monthlyContribution, 12, annualInterestRate );
@@ -175,11 +196,16 @@
         pieChartData = new double[] { (double)inputs.InitialBalance, (double)calculated.TotalContributions, (double)calculated.TotalInterest };
         barChartXAxisLabels = annualBreakdown.Select( r => r.Year.ToString() ).ToArray();
         barChartSeries = new List<ChartSeries>
+    {
+        new ChartSeries { Name = "Balance Inicial", Data = Enumerable.Repeat((double)inputs.InitialBalance, annualBreakdown.Count).ToArray() },
+        new ChartSeries { Name = "Depósitos Totales", Data = annualBreakdown.Select(r => (double)r.TotalContributions).ToArray() },
+        new ChartSeries { Name = "Interés Total", Data = annualBreakdown.Select(r => (double)r.TotalInterest).ToArray() }
+    };
+
+        if ( !isLoading && !isInitialLoad )
         {
-            new ChartSeries { Name = "Balance Inicial", Data = Enumerable.Repeat((double)inputs.InitialBalance, annualBreakdown.Count).ToArray() },
-            new ChartSeries { Name = "Depósitos Totales", Data = annualBreakdown.Select(r => (double)r.TotalContributions).ToArray() },
-            new ChartSeries { Name = "Interés Total", Data = annualBreakdown.Select(r => (double)r.TotalInterest).ToArray() }
-        };
+            await localStorage.SetItemAsync( "compoundInterestInputs", inputs );
+        }
 
         StateHasChanged();
     }
